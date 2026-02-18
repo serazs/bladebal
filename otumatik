@@ -1,20 +1,25 @@
--- HIZLI DESTEK SCRİPTİ (Blade Ball için)
--- Bu script, ana scriptle birlikte çalışır, topu daha erken algılayıp vurur.
+-- GELİŞMİŞ DESTEK SCRİPTİ (Blade Ball)
+-- Ana scriptle birlikte çalıştır, topu daha erken algıla ve vur.
 
 local player = game.Players.LocalPlayer
 local runService = game:GetService("RunService")
 local virtualInput = game:GetService("VirtualInputManager")
 
--- Algılama eşiği (mesafe/hız oranı). Düşürürsen daha erken vurur.
-local TETIKLEME_ORANI = 0.9 -- 0.9 = top daha uzaktayken vur
+-- Ayarlar
+local settings = {
+    TetiklemeOrani = 0.85,        -- Ne kadar erken vuracağı (0.7-1.0, yüksek=erken)
+    VurusOnceligi = "en_yakin",    -- "en_yakin" veya "en_hizli"
+    CokluVurus = false,             -- Aynı anda birden çok topa vurmayı dene (riskli)
+    YavaslatmaModu = false,         -- Topu yavaşlatma (deneysel, çalışmayabilir)
+    DebugMod = true                 -- Konsola bilgi yazdır
+}
 
--- Son vuruş zamanı (çok sık vurmayı engellemek için)
 local lastParryTime = 0
-local PARRY_COOLDOWN = 0.2
+local PARRY_COOLDOWN = 0.15
 
--- Top klasörünü bul (birden çok isim dene)
+-- Top klasörünü bul (esnek)
 local function findBallsFolder()
-    local possibleNames = {"Balls", "Projectiles", "Throwables", "BallsFolder"}
+    local possibleNames = {"Balls", "Projectiles", "Throwables", "BallsFolder", "BallFolder", "ProjectileFolder"}
     for _, name in ipairs(possibleNames) do
         local folder = workspace:FindFirstChild(name)
         if folder then return folder end
@@ -22,17 +27,17 @@ local function findBallsFolder()
     return nil
 end
 
--- Topun hızını bul (farklı kaynakları dene)
+-- Top hızını farklı kaynaklardan al
 local function getBallSpeed(ball)
     -- 1. Direkt Velocity
     local v = ball.Velocity
     if v and v.Magnitude > 0.1 then return v.Magnitude end
     
     -- 2. AssemblyLinearVelocity
-    local success, av = pcall(function() return ball.AssemblyLinearVelocity end)
-    if success and av and av.Magnitude > 0.1 then return av.Magnitude end
+    local av = ball.AssemblyLinearVelocity
+    if av and av.Magnitude > 0.1 then return av.Magnitude end
     
-    -- 3. "zoomies" adlı çocuk (BodyVelocity veya Vector3Value)
+    -- 3. "zoomies" adlı çocuk
     local zoomies = ball:FindFirstChild("zoomies")
     if zoomies then
         if zoomies:IsA("BodyVelocity") then
@@ -48,11 +53,51 @@ local function getBallSpeed(ball)
             return child.Velocity.Magnitude
         end
     end
-    
-    return 0 -- hız bulunamadı
+    return 0
 end
 
--- Ana döngü: her frame'de kontrol et
+-- Topu yavaşlatma girişimi (deneysel)
+local function yavaslatTop(ball)
+    if not ball then return end
+    -- Topa bir BodyForce ekleyerek hızını azaltmayı dene
+    local bf = ball:FindFirstChild("Yavaslatici")
+    if not bf then
+        bf = Instance.new("BodyForce")
+        bf.Name = "Yavaslatici"
+        bf.Force = Vector3.new(0,0,0) -- Başlangıçta etkisiz
+        bf.Parent = ball
+    end
+    -- Topun hızının tersi yönde bir kuvvet uygula (sürtünme etkisi)
+    local hiz = ball.Velocity
+    if hiz.Magnitude > 5 then
+        bf.Force = -hiz.unit * 1000 -- Kuvvet büyüklüğü ayarlanabilir
+    else
+        bf.Force = Vector3.new(0,0,0)
+    end
+end
+
+-- Top bilgilerini topla
+local function getBallInfo(ball, hrp)
+    local speed = getBallSpeed(ball)
+    if speed < 0.5 then return nil end
+    
+    local distance = (hrp.Position - ball.Position).Magnitude
+    local timeToHit = distance / speed
+    
+    -- Hedef kontrolü (eğer attribute varsa)
+    local target = ball:GetAttribute("target")
+    local isTargetingMe = (target == player.Name) or (target == nil) -- target yoksa da dene
+    
+    return {
+        ball = ball,
+        speed = speed,
+        distance = distance,
+        timeToHit = timeToHit,
+        isTargetingMe = isTargetingMe
+    }
+end
+
+-- Ana döngü
 runService.PreSimulation:Connect(function()
     local now = tick()
     if now - lastParryTime < PARRY_COOLDOWN then return end
@@ -63,39 +108,66 @@ runService.PreSimulation:Connect(function()
     if not hrp then return end
     
     local ballsFolder = findBallsFolder()
-    if not ballsFolder then return end
+    if not ballsFolder then 
+        if settings.DebugMod then warn("Top klasörü bulunamadı!") end
+        return 
+    end
     
+    local ballsInfo = {}
     for _, ball in ipairs(ballsFolder:GetChildren()) do
-        -- Top geçerli bir part mı?
-        if not ball:IsA("BasePart") then continue end
+        if ball:IsA("BasePart") then
+            local info = getBallInfo(ball, hrp)
+            if info and info.isTargetingMe then
+                table.insert(ballsInfo, info)
+            end
+        end
+    end
+    
+    if #ballsInfo == 0 then return end
+    
+    -- Vuruş önceliğine göre top seç
+    local targetBall = nil
+    if settings.VurusOnceligi == "en_yakin" then
+        table.sort(ballsInfo, function(a, b) return a.distance < b.distance end)
+    elseif settings.VurusOnceligi == "en_hizli" then
+        table.sort(ballsInfo, function(a, b) return a.speed > b.speed end)
+    else
+        table.sort(ballsInfo, function(a, b) return a.timeToHit < b.timeToHit end)
+    end
+    
+    -- İlk topu al
+    targetBall = ballsInfo[1].ball
+    
+    -- Yavaşlatma modu aktifse
+    if settings.YavaslatmaModu then
+        yavaslatTop(targetBall)
+    end
+    
+    -- Vuruş eşiğini kontrol et
+    local timeToHit = ballsInfo[1].distance / ballsInfo[1].speed
+    if timeToHit <= settings.TetiklemeOrani then
+        virtualInput:SendMouseButtonEvent(0, 0, 0, true, game, 0)
+        task.wait(0.03)
+        virtualInput:SendMouseButtonEvent(0, 0, 0, false, game, 0)
+        lastParryTime = now
         
-        -- "realBall" attribute'ü var mı? (ana scriptteki kontrol)
-        local isReal = ball:GetAttribute("realBall")
-        if isReal == nil then
-            -- Eğer attribute yoksa, belki başka bir top tipidir, yine de dene
+        if settings.DebugMod then
+            print("Vuruldu! Top hızı:", ballsInfo[1].speed, "Mesafe:", ballsInfo[1].distance, "Süre:", timeToHit)
         end
         
-        -- Hızını al
-        local speed = getBallSpeed(ball)
-        if speed < 1 then continue end -- çok yavaş veya hız yok
-        
-        -- Hedef oyuncu
-        local target = ball:GetAttribute("target")
-        if target and target ~= player.Name then continue end -- bize gelmiyorsa atla
-        
-        local distance = (hrp.Position - ball.Position).Magnitude
-        local timeToHit = distance / speed
-        
-        if timeToHit <= TETIKLEME_ORANI then
-            -- VUR!
-            virtualInput:SendMouseButtonEvent(0, 0, 0, true, game, 0)
-            task.wait(0.03)
-            virtualInput:SendMouseButtonEvent(0, 0, 0, false, game, 0)
-            
-            lastParryTime = now
-            break -- bir topa vurduk, diğerlerine gerek yok
+        -- Çoklu vuruş denenecekse diğer topları da dene
+        if settings.CokluVurus then
+            for i = 2, #ballsInfo do
+                local t = ballsInfo[i].distance / ballsInfo[i].speed
+                if t <= settings.TetiklemeOrani then
+                    task.wait(0.01)
+                    virtualInput:SendMouseButtonEvent(0, 0, 0, true, game, 0)
+                    task.wait(0.03)
+                    virtualInput:SendMouseButtonEvent(0, 0, 0, false, game, 0)
+                end
+            end
         end
     end
 end)
 
-print("✅ Destek scripti aktif! Tetikleme oranı:", TETIKLEME_ORANI)
+print("✅ Gelişmiş destek scripti aktif! Ayarlar:", settings)
