@@ -1,60 +1,74 @@
--- LocalScript (Xeno, Synapse vb.)
-local player = game.Players.LocalPlayer
-local runService = game:GetService("RunService")
+-- Ana scripti yükle
+loadstring(game:HttpGet("https://raw.githubusercontent.com/Akash1al/Blade-Ball-Updated-Script/refs/heads/main/Blade-Ball-Script"))()
 
--- Vuruş remote'unu bul (oyuna göre değişebilir)
-local remote = game:GetService("ReplicatedStorage"):FindFirstChild("Parry") 
-        or game:GetService("ReplicatedStorage"):FindFirstChild("Swing")
-        or game:GetService("ReplicatedStorage"):FindFirstChild("Hit")
-        or game:GetService("ReplicatedStorage"):FindFirstChild("Block")
+-- Gecikme sorununu çözmek için ek optimizasyonlar
+local RunService = game:GetService("RunService")
+local Players = game:GetService("Players")
+local VirtualInputManager = game:GetService("VirtualInputManager")
 
-if not remote then
-    warn("Vuruş remote'u bulunamadı! Lütfen oyuna göre düzenle.")
-end
+local player = Players.LocalPlayer
+local parryLock = false
+local lastParryTime = 0
+local parryCooldown = 0.15  -- Aynı topa çok hızlı vurmayı engelle
 
--- Vuruş fonksiyonu (topa vur)
-local function vur(top)
-    if remote then
-        remote:FireServer(top)  -- top objesini gönder
-        print("Vuruldu!")
-    else
-        -- remote yoksa belki F tuşuna basmayı dene? Ama simulate etmek zor.
-    end
-end
-
--- Her frame'de kontrol et (çok hızlı)
-runService.RenderStepped:Connect(function()
-    local character = player.Character
-    if not character then return end
-    local rootPart = character:FindFirstChild("HumanoidRootPart")
-    if not rootPart then return end
-
-    -- Oyundaki tüm topları tara (hızlı olması için GetDescendants yerine belki bir havuz oluşturulabilir)
-    for _, top in ipairs(workspace:GetDescendants()) do
-        if top:IsA("Part") and (top.Name:find("Ball") or top.Name:find("Projectile")) then
-            -- Topun rengi kırmızı mı kontrol et (isteğe bağlı)
-            -- Renk kontrolü: top.BrickColor == BrickColor.new("Really red") gibi
-
-            -- Topun hızı
-            local hiz = top.Velocity
-            if hiz.Magnitude < 1 then continue end  -- duran topu alma
-
-            -- Topun konumu ile oyuncu arasındaki vektör
-            local toPlayer = rootPart.Position - top.Position
-            local mesafe = toPlayer.Magnitude
-
-            -- Topun yönü (birim vektör)
-            local yon = hiz.unit
-
-            -- Topun oyuncuya doğru gelip gelmediğini kontrol et (nokta çarpım)
-            local dogruMu = toPlayer.unit:Dot(yon) > 0.7  -- 0.7'den büyükse yaklaşık aynı yön
-
-            -- Belirli bir mesafeye yaklaştıysa ve üstüne geliyorsa vur
-            if dogruMu and mesafe < 20 then  -- 20 birim mesafe (ayarlayabilirsin)
-                vur(top)
-                -- Aynı topa birden çok kez vurmamak için kısa bir bekleme eklenebilir veya topu işaretle
-                break  -- sadece bir topa vur, hepsine değil
+-- Daha hızlı top bulma fonksiyonu (cache'leme)
+local function getBall()
+    -- workspace.Balls klasörünü kontrol et
+    local ballsFolder = workspace:FindFirstChild("Balls")
+    if ballsFolder then
+        for _, ball in ipairs(ballsFolder:GetChildren()) do
+            if ball:GetAttribute("realBall") then
+                return ball
             end
         end
     end
+    return nil
+end
+
+-- Ana döngü (RenderStepped daha hızlı tepki verir)
+RunService.RenderStepped:Connect(function()
+    local character = player.Character
+    if not character then return end
+    
+    local hrp = character:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+    
+    local ball = getBall()
+    if not ball then return end
+    
+    -- Topun hedefi oyuncu mu?
+    if ball:GetAttribute("target") ~= player.Name then return end
+    
+    -- Topun hızı ve konumu
+    local velocity = ball:FindFirstChild("zoomies") and ball.zoomies:FindFirstChild("VectorVelocity")
+    if not velocity then return end
+    
+    local speed = velocity.Value.Magnitude
+    if speed < 1 then return end  -- Çok yavaş topları atla
+    
+    local distance = (hrp.Position - ball.Position).Magnitude
+    
+    -- Dinamik zamanlama: top hızlandıkça daha erken vur
+    local timingFactor = 0.45  -- Normalde 0.55 idi, daha erken vurmak için düşürdük
+    if speed > 100 then
+        timingFactor = 0.4  -- Çok hızlı toplarda daha da erken vur
+    end
+    
+    local timeToImpact = distance / speed
+    
+    -- Vuruş zamanı geldi mi?
+    if timeToImpact <= timingFactor and not parryLock then
+        -- Fare tıklaması simüle et
+        VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 0)
+        parryLock = true
+        lastParryTime = tick()
+        
+        -- Kısa süreliğine kilidi aç
+        task.delay(parryCooldown, function()
+            parryLock = false
+        end)
+    end
 end)
+
+-- Hata ayıklama için konsola bilgi yazdır (istersen kaldırabilirsin)
+print("Blade Ball Auto Parry - Optimize Edilmiş Sürüm Aktif")
