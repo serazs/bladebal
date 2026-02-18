@@ -1,100 +1,136 @@
--- LocalScript (Xeno, Synapse vb. bir executer'da çalıştır)
+-- LocalScript (Xeno, Synapse vb.)
 
 local player = game.Players.LocalPlayer
-local coreGui = game:GetService("CoreGui")
+local runService = game:GetService("RunService")
+local uis = game:GetService("UserInputService")
 
--- Eğer daha önce çalıştıysa eski halkayı temizle
-local existingHalka = coreGui:FindFirstChild("KorumaHalkasiGUI")
-if existingHalka then existingHalka:Destroy() end
+-- Vuruş remote'unu bul (oyuna göre değişebilir)
+local remote = game:GetService("ReplicatedStorage"):FindFirstChild("Parry") 
+        or game:GetService("ReplicatedStorage"):FindFirstChild("Swing")
+        or game:GetService("ReplicatedStorage"):FindFirstChild("Hit")
+        or game:GetService("ReplicatedStorage"):FindFirstChild("Block")
 
--- Görsel halka için bir ScreenGui (3D değil, ekran üstü 2D halka istersen farklı)
--- Ancak 3D bir halka için Part kullanacağız, onu workspace'e koyacağız. Ama karakter ölünce kaybolmaması için CoreGui'ye bağlı bir Part yapamayız.
--- Daha iyisi, halkayı workspace'e koyup karakter yeniden doğduğunda yeniden oluşturmak.
+-- Eğer remote bulunamazsa, uyarı ver
+if not remote then
+    warn("Vuruş remote'u bulunamadı! Lütfen oyuna göre düzenle.")
+end
 
-local function createHalka()
+-- Ana koruma küresi (görsel)
+local function createProtectionSphere()
     local character = player.Character
     if not character then return nil end
     local rootPart = character:FindFirstChild("HumanoidRootPart")
     if not rootPart then return nil end
 
-    -- Beyaz neon halka (bir disk şeklinde part)
-    local halka = Instance.new("Part")
-    halka.Name = "KorumaHalkasi"
-    halka.Size = Vector3.new(12, 0.2, 12) -- yarıçap 6 birim
-    halka.Shape = Enum.PartType.Cylinder
-    halka.CFrame = rootPart.CFrame * CFrame.new(0, 1, 0) -- biraz yukarıda
-    halka.Anchored = true
-    halka.CanCollide = false
-    halka.Transparency = 0.3
-    halka.BrickColor = BrickColor.new("White")
-    halka.Material = Enum.Material.Neon
-    halka.Parent = workspace
+    -- Ana küre (yarı saydam, sadece dış hatları görünsün diye çok saydam yapalım)
+    local sphere = Instance.new("Part")
+    sphere.Name = "KorumaKuresi"
+    sphere.Size = Vector3.new(2, 2, 2) -- başlangıç boyutu
+    sphere.Shape = Enum.PartType.Ball
+    sphere.CFrame = rootPart.CFrame
+    sphere.Anchored = true
+    sphere.CanCollide = false
+    sphere.Transparency = 0.7
+    sphere.BrickColor = BrickColor.new("White")
+    sphere.Material = Enum.Material.Neon
+    sphere.Parent = workspace
 
-    -- Halkayı döndürmek için (isteğe bağlı)
+    -- Dönen halkalar (3 tane, farklı eksenlerde)
+    local rings = {}
+    for i = 1, 3 do
+        local ring = Instance.new("Part")
+        ring.Name = "Halka" .. i
+        ring.Size = Vector3.new(2, 0.2, 0.2) -- ince
+        ring.Shape = Enum.PartType.Cylinder
+        ring.Anchored = true
+        ring.CanCollide = false
+        ring.Transparency = 0.3
+        ring.BrickColor = BrickColor.new("White")
+        ring.Material = Enum.Material.Neon
+        ring.Parent = workspace
+        table.insert(rings, ring)
+    end
+
+    -- Döndürme animasyonu
     local angle = 0
-    spawn(function()
-        while halka and halka.Parent and character and character.Parent do
-            angle = angle + 0.05
-            if angle > math.pi*2 then angle = 0 end
-            -- Halkayı rootPart'ın etrafında döndür (yatay düzlemde)
-            halka.CFrame = rootPart.CFrame * CFrame.new(0, 1, 0) * CFrame.Angles(0, angle, 0)
-            task.wait(0.03)
+    local connection
+    connection = runService.RenderStepped:Connect(function()
+        if not character or not character.Parent or not rootPart or not rootPart.Parent then
+            if sphere then sphere:Destroy() end
+            for _, r in ipairs(rings) do if r then r:Destroy() end end
+            connection:Disconnect()
+            return
+        end
+
+        angle = angle + 0.03
+        if angle > math.pi*2 then angle = 0 end
+
+        -- Ana küreyi rootPart'ın üzerinde tut
+        sphere.CFrame = rootPart.CFrame * CFrame.new(0, 1, 0)
+
+        -- Halkaları farklı eksenlerde döndür
+        if rings[1] then
+            rings[1].CFrame = rootPart.CFrame * CFrame.new(0, 1, 0) * CFrame.Angles(0, angle, 0) * CFrame.new(0, 0, sphere.Size.X/2)
+        end
+        if rings[2] then
+            rings[2].CFrame = rootPart.CFrame * CFrame.new(0, 1, 0) * CFrame.Angles(angle, 0, 0) * CFrame.new(0, 0, sphere.Size.X/2)
+        end
+        if rings[3] then
+            rings[3].CFrame = rootPart.CFrame * CFrame.new(0, 1, 0) * CFrame.Angles(0, 0, angle) * CFrame.new(0, sphere.Size.Y/2, 0)
+        end
+
+        -- Boyutu güncelle
+        sphere.Size = sphere.Size  -- aslında boyutu aşağıdaki döngüde değişecek
+        for _, r in ipairs(rings) do
+            r.Size = Vector3.new(sphere.Size.X, 0.2, 0.2)
         end
     end)
 
-    return halka
+    return sphere, rings
 end
 
-local halka = createHalka()
+local sphere, rings = createProtectionSphere()
 
--- Otomatik vuruş fonksiyonu (oyuna göre düzenle)
-local function vurTopa(top)
-    -- Örnek: Çoğu blade ball oyununda "Parry" adlı bir remote vardır.
-    -- Aşağıdaki satırlar sadece tahminidir, oyuna göre değiştirmelisin.
-    local remote = game:GetService("ReplicatedStorage"):FindFirstChild("Parry") 
-            or game:GetService("ReplicatedStorage"):FindFirstChild("Swing")
-            or game:GetService("ReplicatedStorage"):FindFirstChild("Hit")
-    if remote then
-        remote:FireServer(top) -- veya topun kendisini gönder
-        print("Top vuruldu:", top.Name)
-    else
-        -- Eğer remote bulunamazsa, belki topa direkt müdahale?
-        -- top:Destroy() -- bu sadece topu yok eder, oyun mekaniğini bozabilir.
-        warn("Vuruş remote'u bulunamadı!")
-    end
-end
+-- En yakın topu bul ve boyutu ayarla
+local function updateSphereSize()
+    local character = player.Character
+    if not character then return end
+    local rootPart = character:FindFirstChild("HumanoidRootPart")
+    if not rootPart then return end
 
--- Topları kontrol etme döngüsü
-spawn(function()
-    while halka and halka.Parent do
-        local character = player.Character
-        if character then
-            local rootPart = character:FindFirstChild("HumanoidRootPart")
-            if rootPart then
-                -- Halkanın içindeki parçaları bul (çakışan)
-                local parts = workspace:GetPartsInPart(halka)
-                for _, part in ipairs(parts) do
-                    -- Top olma ihtimali yüksek olan parçalar: ismi "Ball" içeren veya hızlı hareket eden
-                    if (part.Name:find("Ball") or part.Name:find("Projectile") or part:IsA("Part") and part.Velocity.Magnitude > 10) and part ~= halka then
-                        -- Topun oyuncuya doğru gelip gelmediğini kontrol et
-                        local toRoot = (rootPart.Position - part.Position).unit
-                        local velDir = part.Velocity.unit
-                        if toRoot:Dot(velDir) > 0.5 then -- yaklaşık olarak aynı yön
-                            vurTopa(part)
-                        end
-                    end
-                end
+    local closestBall = nil
+    local closestDist = math.huge
+
+    -- Workspace'teki topları bul (isimlerinde "Ball" geçen veya hızlı hareket eden)
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("Part") and (obj.Name:find("Ball") or obj.Name:find("Projectile") or obj.Velocity.Magnitude > 10) then
+            local dist = (obj.Position - rootPart.Position).Magnitude
+            if dist < closestDist then
+                closestDist = dist
+                closestBall = obj
             end
         end
-        task.wait(0.1) -- 0.1 saniyede bir kontrol
     end
-end)
 
--- Karakter değişimlerinde halkayı yeniden oluştur
+    if closestBall and sphere then
+        -- Mesafeye göre boyut ayarla: yakın top = büyük küre (max 20), uzak top = küçük küre (min 5)
+        local targetSize = math.clamp(20 - closestDist, 5, 20)
+        sphere.Size = Vector3.new(targetSize, targetSize, targetSize)
+
+        -- Eğer top çok yakınsa ve remote varsa vur
+        if closestDist < targetSize and remote then
+            remote:FireServer(closestBall)
+            print("Top vuruldu!", closestBall.Name)
+        end
+    end
+end
+
+-- Her frame'de kontrol et
+runService.RenderStepped:Connect(updateSphereSize)
+
+-- Karakter değişince yeniden oluştur
 player.CharacterAdded:Connect(function()
-    if halka then halka:Destroy() end
-    halka = createHalka()
+    if sphere then sphere:Destroy() end
+    for _, r in ipairs(rings or {}) do if r then r:Destroy() end end
+    sphere, rings = createProtectionSphere()
 end)
-
--- Script durduğunda halkayı temizle (isteğe bağlı)
--- (Script genelde durmaz, ama GUI kapatılırsa)
