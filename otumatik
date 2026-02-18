@@ -1,0 +1,100 @@
+-- LocalScript (Xeno, Synapse vb. bir executer'da çalıştır)
+
+local player = game.Players.LocalPlayer
+local coreGui = game:GetService("CoreGui")
+
+-- Eğer daha önce çalıştıysa eski halkayı temizle
+local existingHalka = coreGui:FindFirstChild("KorumaHalkasiGUI")
+if existingHalka then existingHalka:Destroy() end
+
+-- Görsel halka için bir ScreenGui (3D değil, ekran üstü 2D halka istersen farklı)
+-- Ancak 3D bir halka için Part kullanacağız, onu workspace'e koyacağız. Ama karakter ölünce kaybolmaması için CoreGui'ye bağlı bir Part yapamayız.
+-- Daha iyisi, halkayı workspace'e koyup karakter yeniden doğduğunda yeniden oluşturmak.
+
+local function createHalka()
+    local character = player.Character
+    if not character then return nil end
+    local rootPart = character:FindFirstChild("HumanoidRootPart")
+    if not rootPart then return nil end
+
+    -- Beyaz neon halka (bir disk şeklinde part)
+    local halka = Instance.new("Part")
+    halka.Name = "KorumaHalkasi"
+    halka.Size = Vector3.new(12, 0.2, 12) -- yarıçap 6 birim
+    halka.Shape = Enum.PartType.Cylinder
+    halka.CFrame = rootPart.CFrame * CFrame.new(0, 1, 0) -- biraz yukarıda
+    halka.Anchored = true
+    halka.CanCollide = false
+    halka.Transparency = 0.3
+    halka.BrickColor = BrickColor.new("White")
+    halka.Material = Enum.Material.Neon
+    halka.Parent = workspace
+
+    -- Halkayı döndürmek için (isteğe bağlı)
+    local angle = 0
+    spawn(function()
+        while halka and halka.Parent and character and character.Parent do
+            angle = angle + 0.05
+            if angle > math.pi*2 then angle = 0 end
+            -- Halkayı rootPart'ın etrafında döndür (yatay düzlemde)
+            halka.CFrame = rootPart.CFrame * CFrame.new(0, 1, 0) * CFrame.Angles(0, angle, 0)
+            task.wait(0.03)
+        end
+    end)
+
+    return halka
+end
+
+local halka = createHalka()
+
+-- Otomatik vuruş fonksiyonu (oyuna göre düzenle)
+local function vurTopa(top)
+    -- Örnek: Çoğu blade ball oyununda "Parry" adlı bir remote vardır.
+    -- Aşağıdaki satırlar sadece tahminidir, oyuna göre değiştirmelisin.
+    local remote = game:GetService("ReplicatedStorage"):FindFirstChild("Parry") 
+            or game:GetService("ReplicatedStorage"):FindFirstChild("Swing")
+            or game:GetService("ReplicatedStorage"):FindFirstChild("Hit")
+    if remote then
+        remote:FireServer(top) -- veya topun kendisini gönder
+        print("Top vuruldu:", top.Name)
+    else
+        -- Eğer remote bulunamazsa, belki topa direkt müdahale?
+        -- top:Destroy() -- bu sadece topu yok eder, oyun mekaniğini bozabilir.
+        warn("Vuruş remote'u bulunamadı!")
+    end
+end
+
+-- Topları kontrol etme döngüsü
+spawn(function()
+    while halka and halka.Parent do
+        local character = player.Character
+        if character then
+            local rootPart = character:FindFirstChild("HumanoidRootPart")
+            if rootPart then
+                -- Halkanın içindeki parçaları bul (çakışan)
+                local parts = workspace:GetPartsInPart(halka)
+                for _, part in ipairs(parts) do
+                    -- Top olma ihtimali yüksek olan parçalar: ismi "Ball" içeren veya hızlı hareket eden
+                    if (part.Name:find("Ball") or part.Name:find("Projectile") or part:IsA("Part") and part.Velocity.Magnitude > 10) and part ~= halka then
+                        -- Topun oyuncuya doğru gelip gelmediğini kontrol et
+                        local toRoot = (rootPart.Position - part.Position).unit
+                        local velDir = part.Velocity.unit
+                        if toRoot:Dot(velDir) > 0.5 then -- yaklaşık olarak aynı yön
+                            vurTopa(part)
+                        end
+                    end
+                end
+            end
+        end
+        task.wait(0.1) -- 0.1 saniyede bir kontrol
+    end
+end)
+
+-- Karakter değişimlerinde halkayı yeniden oluştur
+player.CharacterAdded:Connect(function()
+    if halka then halka:Destroy() end
+    halka = createHalka()
+end)
+
+-- Script durduğunda halkayı temizle (isteğe bağlı)
+-- (Script genelde durmaz, ama GUI kapatılırsa)
