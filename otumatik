@@ -1,5 +1,5 @@
--- ULTIMATE BLADE BALL v4 (EN GELİŞMİŞ VERSİYON)
--- Profesyonel otomatik parry + Görsel efektler + Hız rekoru
+-- BLADE BALL ULTIMATE AUTO PARRY v5 (EN GELİŞMİŞ)
+-- Hazır kütüphaneler ve optimizasyonlarla donatılmıştır
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -7,338 +7,340 @@ local UserInputService = game:GetService("UserInputService")
 local VirtualInputManager = game:GetService("VirtualInputManager")
 local CoreGui = game:GetService("CoreGui")
 local Workspace = game:GetService("Workspace")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local player = Players.LocalPlayer
-local camera = Workspace.CurrentCamera
 
--- ===== GELİŞMİŞ AYARLAR =====
-local settings = {
-    -- Ana ayarlar
-    Enabled = true,
-    Keybind = Enum.KeyCode.F,
+-- ===== KÜTÜPHANELER (güvenli ve hızlı) =====
+local Library = {
+    -- Çizim kütüphanesi (Drawing destekleniyorsa kullan, yoksa Part tabanlı)
+    Drawing = pcall(function() return Drawing.new("Line") end) and Drawing or nil,
     
-    -- Vuruş ayarları
-    ParryMode = "AGGRESSIVE",  -- "NORMAL", "AGGRESSIVE", "INSTANT"
-    PredictTime = 0.45,         -- Tahmin süresi (düşük=erken vuruş)
-    MaxDistance = 40,            -- Maksimum algılama mesafesi
-    HitChance = 0.98,            -- Vuruş doğruluğu (0.95-1.0 arası)
-    
-    -- Görsel ayarlar
-    Visuals = {
-        Enabled = true,
-        BallLines = true,        -- Top-oyuncu çizgisi
-        PredictionDots = true,    -- Tahmin noktaları
-        Trajectory = true,        -- Top rotası
-        ImpactMarker = true,      -- Çarpma noktası
-        Colors = {
-            Line = Color3.fromRGB(255, 50, 50),
-            Prediction = Color3.fromRGB(50, 255, 50),
-            Trajectory = Color3.fromRGB(255, 255, 0),
-            Impact = Color3.fromRGB(255, 0, 255)
-        },
-        Transparency = 0.3,
-        Thickness = 0.5
-    },
-    
-    -- Performans ayarları
-    Performance = {
-        MaxBallsToCheck = 10,     -- Maksimum kontrol edilecek top sayısı
-        UpdateRate = 0.01,         -- Güncelleme hızı (saniye)
-        UseParallel = true         -- Paralel işlem kullan
-    }
+    -- Notification kütüphanesi (basit)
+    notify = function(msg, duration)
+        local notif = Instance.new("ScreenGui")
+        notif.Name = "Notification"
+        notif.Parent = CoreGui
+        notif.ResetOnSpawn = false
+        
+        local frame = Instance.new("Frame")
+        frame.Size = UDim2.new(0, 300, 0, 60)
+        frame.Position = UDim2.new(0.5, -150, 0.8, 0)
+        frame.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
+        frame.BackgroundTransparency = 0.2
+        frame.BorderSizePixel = 0
+        frame.Parent = notif
+        
+        local corner = Instance.new("UICorner")
+        corner.CornerRadius = UDim.new(0, 15)
+        corner.Parent = frame
+        
+        local text = Instance.new("TextLabel")
+        text.Size = UDim2.new(1, -20, 1, 0)
+        text.Position = UDim2.new(0, 10, 0, 0)
+        text.BackgroundTransparency = 1
+        text.Text = msg
+        text.TextColor3 = Color3.new(1, 1, 1)
+        text.Font = Enum.Font.GothamBold
+        text.TextSize = 20
+        text.TextWrapped = true
+        text.Parent = frame
+        
+        task.delay(duration or 3, function()
+            frame:TweenPosition(UDim2.new(0.5, -150, 1, 0), Enum.EasingDirection.In, Enum.EasingStyle.Quint, 0.5, true)
+            task.delay(0.5, function() notif:Destroy() end)
+        end)
+    end
 }
 
--- ===== DEĞİŞKENLER =====
-local ballsFolder = Workspace:FindFirstChild("Balls") 
-    or Workspace:FindFirstChild("Projectiles") 
-    or Workspace:FindFirstChild("Throwables") 
-    or Workspace:FindFirstChild("BallFolder")
+-- ===== TOP YÖNETİCİSİ (optimize edilmiş) =====
+local BallManager = {
+    balls = {},
+    folder = nil,
+    initialized = false,
     
-local lastParryTime = 0
-local visualObjects = {}
-local ballCache = {}
-local frameSkip = 0
-
--- ===== TOP BULMA FONKSİYONU (EN HIZLI) =====
-local function findBalls()
-    if not ballsFolder then return {} end
-    
-    -- Cache kullan (performans için)
-    if #ballCache > 0 and frameSkip % 3 ~= 0 then
-        return ballCache
-    end
-    
-    local balls = {}
-    local count = 0
-    
-    for _, ball in ipairs(ballsFolder:GetChildren()) do
-        if ball:IsA("BasePart") and ball.Transparency < 0.5 then
-            count = count + 1
-            table.insert(balls, ball)
-            if count >= settings.Performance.MaxBallsToCheck then
+    init = function(self)
+        -- Top klasörünü bul
+        local possibleFolders = {"Balls", "Projectiles", "Throwables", "BallFolder"}
+        for _, name in ipairs(possibleFolders) do
+            local f = Workspace:FindFirstChild(name)
+            if f then
+                self.folder = f
                 break
             end
         end
-    end
+        
+        if not self.folder then
+            Library.notify("❌ Top klasörü bulunamadı!", 3)
+            return false
+        end
+        
+        -- Mevcut topları ekle
+        for _, ball in ipairs(self.folder:GetChildren()) do
+            if ball:IsA("BasePart") then
+                table.insert(self.balls, ball)
+            end
+        end
+        
+        -- Yeni top eklendiğinde listeye ekle
+        self.folder.ChildAdded:Connect(function(child)
+            if child:IsA("BasePart") then
+                table.insert(self.balls, child)
+            end
+        end)
+        
+        -- Top silindiğinde listeden çıkar
+        self.folder.ChildRemoved:Connect(function(child)
+            for i, ball in ipairs(self.balls) do
+                if ball == child then
+                    table.remove(self.balls, i)
+                    break
+                end
+            end
+        end)
+        
+        self.initialized = true
+        return true
+    end,
     
-    ballCache = balls
-    frameSkip = frameSkip + 1
-    return balls
-end
+    getBalls = function(self)
+        return self.balls
+    end
+}
 
--- ===== TOP HIZINI VE YÖNÜNÜ BUL (ÇOK GELİŞMİŞ) =====
+-- ===== TOP VERİLERİNİ AL (hızlı) =====
 local function getBallData(ball)
     local data = {
         position = ball.Position,
         velocity = ball.Velocity,
-        speed = 0,
-        direction = Vector3.new(0,0,0),
-        timeToHit = 999,
-        isDangerous = false
+        speed = ball.Velocity.Magnitude,
+        target = ball:GetAttribute("target")
     }
     
-    -- Hız kontrolü
-    if ball.Velocity and ball.Velocity.Magnitude > 0.1 then
-        data.velocity = ball.Velocity
-        data.speed = ball.Velocity.Magnitude
-        data.direction = ball.Velocity.unit
-    elseif ball.AssemblyLinearVelocity and ball.AssemblyLinearVelocity.Magnitude > 0.1 then
+    -- Eğer velocity sıfırsa AssemblyLinearVelocity'yi dene
+    if data.speed < 0.1 then
         data.velocity = ball.AssemblyLinearVelocity
-        data.speed = ball.AssemblyLinearVelocity.Magnitude
-        data.direction = ball.AssemblyLinearVelocity.unit
-    else
-        -- BodyVelocity ara
+        data.speed = data.velocity.Magnitude
+    end
+    
+    -- Hala sıfırsa BodyVelocity ara
+    if data.speed < 0.1 then
         for _, child in ipairs(ball:GetChildren()) do
-            if child:IsA("BodyVelocity") and child.Velocity.Magnitude > 0.1 then
+            if child:IsA("BodyVelocity") then
                 data.velocity = child.Velocity
-                data.speed = child.Velocity.Magnitude
-                data.direction = child.Velocity.unit
+                data.speed = data.velocity.Magnitude
                 break
             end
         end
     end
     
-    -- Hedef kontrolü (attribute)
-    local target = ball:GetAttribute("target")
-    data.isDangerous = (target == nil or target == player.Name)
-    
     return data
 end
 
--- ===== EN TEHLİKELİ TOPU BUL (AKILLI ALGILAMA) =====
-local function findMostDangerousBall()
+-- ===== OYUNCUYA GELEN TOPLARI BUL =====
+local function getIncomingBalls()
     local character = player.Character
-    if not character then return nil end
+    if not character then return {} end
     
     local hrp = character:FindFirstChild("HumanoidRootPart")
-    if not hrp then return nil end
+    if not hrp then return {} end
     
-    local balls = findBalls()
-    local mostDangerous = nil
-    local smallestTime = math.huge
-    local closestDistance = math.huge
+    local incoming = {}
+    local balls = BallManager:getBalls()
     
     for _, ball in ipairs(balls) do
         local data = getBallData(ball)
-        
-        if data.isDangerous and data.speed > 5 then
+        if data.speed > 5 then  -- hızlı toplar
+            -- Hedef kontrolü
+            if data.target and data.target ~= player.Name then
+                goto continue
+            end
+            
             local toPlayer = hrp.Position - data.position
             local distance = toPlayer.Magnitude
-            local dotProduct = toPlayer.unit:Dot(data.direction)
+            local direction = data.velocity.unit
+            local dot = toPlayer.unit:Dot(direction)
             
-            -- Top oyuncuya doğru geliyor mu?
-            if dotProduct > 0.3 then
+            -- Oyuncuya doğru geliyor mu? (dot > 0.3)
+            if dot > 0.3 then
                 local timeToHit = distance / data.speed
-                
-                -- Zaman ve mesafe kontrolü
-                if timeToHit < smallestTime and distance < settings.MaxDistance then
-                    smallestTime = timeToHit
-                    closestDistance = distance
-                    mostDangerous = {
-                        ball = ball,
-                        data = data,
-                        timeToHit = timeToHit,
-                        distance = distance,
-                        dotProduct = dotProduct
-                    }
-                end
+                table.insert(incoming, {
+                    ball = ball,
+                    data = data,
+                    distance = distance,
+                    timeToHit = timeToHit,
+                    dot = dot
+                })
             end
         end
+        ::continue::
     end
     
-    return mostDangerous
+    -- Zamana göre sırala (en yakın olan önce)
+    table.sort(incoming, function(a, b) return a.timeToHit < b.timeToHit end)
+    
+    return incoming
 end
 
--- ===== VURUŞ ZAMANINI HESAPLA (AKILLI) =====
-local function shouldParry(ballInfo)
-    if not ballInfo then return false end
-    
+-- ===== VURUŞ ZAMANI KONTROLÜ =====
+local function shouldParry(ballInfo, settings)
     local timeToHit = ballInfo.timeToHit
     local distance = ballInfo.distance
-    local dotProduct = ballInfo.dotProduct
+    local dot = ballInfo.dot
     
-    -- Vuruş moduna göre zamanlama
-    local threshold = settings.PredictTime
+    -- Ayarlara göre eşik değeri
+    local threshold = settings.ParryTime
     
-    if settings.ParryMode == "AGGRESSIVE" then
-        threshold = threshold * 0.8  -- Daha erken vur
-    elseif settings.ParryMode == "INSTANT" then
-        threshold = threshold * 1.5  -- Çok erken vur
+    -- Dot product'a göre hassasiyet
+    if dot > 0.9 then
+        threshold = threshold * 0.9  -- tam üstüne geliyorsa daha erken vur
+    elseif dot < 0.5 then
+        return false  -- çok açılı geliyorsa vurma
     end
     
-    -- Dot product'a göre hassasiyet ayarı
-    if dotProduct > 0.8 then
-        threshold = threshold * 0.9  -- Tam üstüne geliyorsa daha erken vur
+    -- Mesafe çok uzaksa vurma
+    if distance > settings.MaxDistance then
+        return false
     end
     
-    -- Şans faktörü (HitChance)
-    if math.random() > settings.HitChance then
-        return false  -- Bazen kaçır (doğal görünsün diye)
-    end
-    
-    return timeToHit <= threshold and distance <= settings.MaxDistance
+    -- Zaman kontrolü
+    return timeToHit <= threshold
 end
 
--- ===== VURUŞ YAP (EN HIZLI YÖNTEM) =====
-local function doParry(ballInfo)
-    if not settings.Enabled then return end
-    
-    local now = tick()
-    if now - lastParryTime < 0.08 then return end  -- Cooldown
-    
-    -- Çoklu vuruş yöntemi (her ihtimale karşı)
+-- ===== VURUŞ YAP (redundant yöntemler) =====
+local function performParry(ball)
+    -- Yöntem 1: VirtualInputManager ile tıklama
     VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 0)
     task.wait(0.01)
     VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 0)
     
-    -- Yedek vuruş (remote event)
-    local remote = game:GetService("ReplicatedStorage"):FindFirstChild("Parry") 
-            or game:GetService("ReplicatedStorage"):FindFirstChild("Swing")
-            or game:GetService("ReplicatedStorage"):FindFirstChild("Block")
+    -- Yöntem 2: Remote event (varsa)
+    local remote = ReplicatedStorage:FindFirstChild("Parry") or
+                   ReplicatedStorage:FindFirstChild("Swing") or
+                   ReplicatedStorage:FindFirstChild("Block") or
+                   ReplicatedStorage:FindFirstChild("Hit")
     if remote then
-        remote:FireServer(ballInfo.ball)
+        remote:FireServer(ball)
     end
     
-    lastParryTime = now
-    
-    -- Görsel efekt
-    if settings.Visuals.Enabled and settings.Visuals.ImpactMarker then
-        createImpactEffect(ballInfo.ball.Position + ballInfo.data.velocity * ballInfo.timeToHit)
-    end
+    -- Yöntem 3: Klavye simülasyonu (F tuşu)
+    VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.F, false, game)
+    task.wait(0.01)
+    VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.F, false, game)
 end
 
--- ===== GÖRSEL EFEKTLER (ESP) =====
-local function createVisuals()
-    -- Eski objeleri temizle
-    for _, obj in ipairs(visualObjects) do
-        pcall(function() obj:Destroy() end)
-    end
-    visualObjects = {}
+-- ===== GÖRSEL ÇİZİMLER (ESP) =====
+local VisualManager = {
+    objects = {},
     
-    if not settings.Visuals.Enabled then return end
+    clear = function(self)
+        for _, obj in ipairs(self.objects) do
+            pcall(function() obj:Destroy() end)
+        end
+        self.objects = {}
+    end,
     
-    local character = player.Character
-    if not character then return end
-    
-    local hrp = character:FindFirstChild("HumanoidRootPart")
-    if not hrp then return end
-    
-    local balls = findBalls()
-    
-    for _, ball in ipairs(balls) do
-        local data = getBallData(ball)
+    drawLine = function(self, startPos, endPos, color, thickness)
+        local distance = (endPos - startPos).Magnitude
+        if distance < 0.5 then return end
         
-        if data.isDangerous and data.speed > 5 then
+        local line = Instance.new("Part")
+        line.Size = Vector3.new(thickness or 0.3, thickness or 0.3, distance)
+        line.CFrame = CFrame.lookAt(startPos, endPos) * CFrame.new(0, 0, -distance/2)
+        line.Anchored = true
+        line.CanCollide = false
+        line.Material = Enum.Material.Neon
+        line.BrickColor = BrickColor.new(color)
+        line.Transparency = 0.3
+        line.Parent = Workspace
+        
+        table.insert(self.objects, line)
+        return line
+    end,
+    
+    drawDot = function(self, position, color, size)
+        local dot = Instance.new("Part")
+        dot.Size = Vector3.new(size or 0.8, size or 0.8, size or 0.8)
+        dot.Shape = Enum.PartType.Ball
+        dot.Position = position
+        dot.Anchored = true
+        dot.CanCollide = false
+        dot.Material = Enum.Material.Neon
+        dot.BrickColor = BrickColor.new(color)
+        dot.Transparency = 0.2
+        dot.Parent = Workspace
+        
+        table.insert(self.objects, dot)
+        return dot
+    end,
+    
+    updateESP = function(self, incomingBalls, settings)
+        self:clear()
+        
+        if not settings.Visuals.Enabled then return end
+        
+        local character = player.Character
+        if not character then return end
+        local hrp = character:FindFirstChild("HumanoidRootPart")
+        if not hrp then return end
+        
+        for _, ballInfo in ipairs(incomingBalls) do
+            local ball = ballInfo.ball
+            local data = ballInfo.data
+            
             -- Top-oyuncu çizgisi
             if settings.Visuals.BallLines then
-                local line = createLine(ball.Position, hrp.Position, settings.Visuals.Colors.Line)
-                table.insert(visualObjects, line)
+                self:drawLine(ball.Position, hrp.Position, settings.Visuals.Colors.Line, 0.3)
             end
             
             -- Tahmin rotası
-            if settings.Visuals.Trajectory and data.speed > 0 then
-                local futurePos = ball.Position + data.velocity * 2  -- 2 saniyelik tahmin
-                local trajectory = createLine(ball.Position, futurePos, settings.Visuals.Colors.Trajectory)
-                table.insert(visualObjects, trajectory)
+            if settings.Visuals.Trajectory and data.speed > 5 then
+                local futurePos = ball.Position + data.velocity * 2
+                self:drawLine(ball.Position, futurePos, settings.Visuals.Colors.Trajectory, 0.2)
             end
             
             -- Tahmin noktaları
             if settings.Visuals.PredictionDots then
                 for i = 1, 5 do
-                    local time = i * 0.2
-                    local pos = ball.Position + data.velocity * time
-                    local dot = createDot(pos, settings.Visuals.Colors.Prediction, 0.5)
-                    table.insert(visualObjects, dot)
+                    local t = i * 0.2
+                    local pos = ball.Position + data.velocity * t
+                    self:drawDot(pos, settings.Visuals.Colors.Prediction, 0.4)
                 end
             end
         end
     end
-end
+}
 
--- ===== YARDIMCI FONKSİYONLAR (ÇİZGİ, NOKTA OLUŞTURMA) =====
-function createLine(startPos, endPos, color)
-    local distance = (endPos - startPos).Magnitude
-    if distance < 0.1 then return end
-    
-    local line = Instance.new("Part")
-    line.Size = Vector3.new(settings.Visuals.Thickness, settings.Visuals.Thickness, distance)
-    line.CFrame = CFrame.lookAt(startPos, endPos) * CFrame.new(0, 0, -distance/2)
-    line.Anchored = true
-    line.CanCollide = false
-    line.Material = Enum.Material.Neon
-    line.BrickColor = BrickColor.new(color)
-    line.Transparency = settings.Visuals.Transparency
-    line.Parent = Workspace
-    
-    return line
-end
+-- ===== AYARLAR =====
+local settings = {
+    Enabled = true,
+    ParryTime = 0.45,
+    MaxDistance = 35,
+    ParryMode = "AGGRESSIVE",  -- NORMAL, AGGRESSIVE, INSTANT
+    Visuals = {
+        Enabled = true,
+        BallLines = true,
+        PredictionDots = true,
+        Trajectory = true,
+        Colors = {
+            Line = Color3.fromRGB(255, 50, 50),
+            Prediction = Color3.fromRGB(50, 255, 50),
+            Trajectory = Color3.fromRGB(255, 255, 0)
+        }
+    }
+}
 
-function createDot(position, color, size)
-    local dot = Instance.new("Part")
-    dot.Size = Vector3.new(size, size, size)
-    dot.Shape = Enum.PartType.Ball
-    dot.Position = position
-    dot.Anchored = true
-    dot.CanCollide = false
-    dot.Material = Enum.Material.Neon
-    dot.BrickColor = BrickColor.new(color)
-    dot.Transparency = settings.Visuals.Transparency
-    dot.Parent = Workspace
-    
-    return dot
-end
-
-function createImpactEffect(position)
-    local impact = Instance.new("Part")
-    impact.Size = Vector3.new(2, 2, 2)
-    impact.Shape = Enum.PartType.Ball
-    impact.Position = position
-    impact.Anchored = true
-    impact.CanCollide = false
-    impact.Material = Enum.Material.Neon
-    impact.BrickColor = BrickColor.new(settings.Visuals.Colors.Impact)
-    impact.Transparency = 0.2
-    impact.Parent = Workspace
-    
-    table.insert(visualObjects, impact)
-    
-    -- 1 saniye sonra sil
-    task.delay(1, function()
-        pcall(function() impact:Destroy() end)
-    end)
-end
-
--- ===== GUI OLUŞTUR =====
+-- ===== GUI OLUŞTURMA =====
 local function createGUI()
     local gui = Instance.new("ScreenGui")
-    gui.Name = "UltimateBladeBall"
+    gui.Name = "BladeBallUltimate"
     gui.Parent = CoreGui
     gui.ResetOnSpawn = false
     
     local main = Instance.new("Frame")
-    main.Size = UDim2.new(0, 250, 0, 300)
+    main.Size = UDim2.new(0, 250, 0, 280)
     main.Position = UDim2.new(0.02, 0, 0.3, 0)
-    main.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
+    main.BackgroundColor3 = Color3.fromRGB(20, 20, 30)
     main.BackgroundTransparency = 0.1
     main.BorderSizePixel = 0
     main.Parent = gui
@@ -357,10 +359,10 @@ local function createGUI()
     local title = Instance.new("TextLabel")
     title.Size = UDim2.new(1, 0, 0, 40)
     title.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
-    title.Text = "⚡ ULTIMATE V4"
+    title.Text = "⚡ BLADE BALL ULTIMATE"
     title.TextColor3 = Color3.new(1, 1, 1)
     title.Font = Enum.Font.GothamBold
-    title.TextSize = 20
+    title.TextSize = 16
     title.Parent = main
     
     local titleCorner = Instance.new("UICorner")
@@ -368,27 +370,27 @@ local function createGUI()
     titleCorner.Parent = title
     
     local toggleBtn = Instance.new("TextButton")
-    toggleBtn.Size = UDim2.new(0.8, 0, 0, 40)
+    toggleBtn.Size = UDim2.new(0.8, 0, 0, 35)
     toggleBtn.Position = UDim2.new(0.1, 0, 0.15, 0)
     toggleBtn.BackgroundColor3 = Color3.fromRGB(0, 200, 100)
     toggleBtn.Text = "✅ AKTİF"
     toggleBtn.TextColor3 = Color3.new(1, 1, 1)
     toggleBtn.Font = Enum.Font.GothamBold
-    toggleBtn.TextSize = 16
+    toggleBtn.TextSize = 14
     toggleBtn.Parent = main
     
     local btnCorner = Instance.new("UICorner")
-    btnCorner.CornerRadius = UDim.new(0, 10)
+    btnCorner.CornerRadius = UDim.new(0, 8)
     btnCorner.Parent = toggleBtn
     
     local modeBtn = Instance.new("TextButton")
-    modeBtn.Size = UDim2.new(0.8, 0, 0, 35)
+    modeBtn.Size = UDim2.new(0.8, 0, 0, 30)
     modeBtn.Position = UDim2.new(0.1, 0, 0.3, 0)
     modeBtn.BackgroundColor3 = Color3.fromRGB(255, 150, 0)
     modeBtn.Text = "MOD: " .. settings.ParryMode
     modeBtn.TextColor3 = Color3.new(1, 1, 1)
     modeBtn.Font = Enum.Font.Gotham
-    modeBtn.TextSize = 14
+    modeBtn.TextSize = 12
     modeBtn.Parent = main
     
     local modeCorner = Instance.new("UICorner")
@@ -396,28 +398,28 @@ local function createGUI()
     modeCorner.Parent = modeBtn
     
     local espBtn = Instance.new("TextButton")
-    espBtn.Size = UDim2.new(0.8, 0, 0, 35)
+    espBtn.Size = UDim2.new(0.8, 0, 0, 30)
     espBtn.Position = UDim2.new(0.1, 0, 0.45, 0)
     espBtn.BackgroundColor3 = settings.Visuals.Enabled and Color3.fromRGB(0, 150, 200) or Color3.fromRGB(100, 100, 100)
     espBtn.Text = settings.Visuals.Enabled and "👁️ ESP: AÇIK" or "👁️ ESP: KAPALI"
     espBtn.TextColor3 = Color3.new(1, 1, 1)
     espBtn.Font = Enum.Font.Gotham
-    espBtn.TextSize = 14
+    espBtn.TextSize = 12
     espBtn.Parent = main
     
     local espCorner = Instance.new("UICorner")
     espCorner.CornerRadius = UDim.new(0, 8)
     espCorner.Parent = espBtn
     
-    local timeSlider = Instance.new("TextLabel")
-    timeSlider.Size = UDim2.new(0.8, 0, 0, 20)
-    timeSlider.Position = UDim2.new(0.1, 0, 0.6, 0)
-    timeSlider.BackgroundTransparency = 1
-    timeSlider.Text = "Zamanlama: " .. settings.PredictTime
-    timeSlider.TextColor3 = Color3.new(1, 1, 1)
-    timeSlider.Font = Enum.Font.Gotham
-    timeSlider.TextSize = 14
-    timeSlider.Parent = main
+    local timeLabel = Instance.new("TextLabel")
+    timeLabel.Size = UDim2.new(0.8, 0, 0, 20)
+    timeLabel.Position = UDim2.new(0.1, 0, 0.6, 0)
+    timeLabel.BackgroundTransparency = 1
+    timeLabel.Text = "Zamanlama: " .. settings.ParryTime
+    timeLabel.TextColor3 = Color3.new(1, 1, 1)
+    timeLabel.Font = Enum.Font.Gotham
+    timeLabel.TextSize = 12
+    timeLabel.Parent = main
     
     local timeUp = Instance.new("TextButton")
     timeUp.Size = UDim2.new(0.2, 0, 0, 25)
@@ -426,7 +428,7 @@ local function createGUI()
     timeUp.Text = "+"
     timeUp.TextColor3 = Color3.new(1, 1, 1)
     timeUp.Font = Enum.Font.GothamBold
-    timeUp.TextSize = 16
+    timeUp.TextSize = 14
     timeUp.Parent = main
     
     local timeDown = Instance.new("TextButton")
@@ -436,20 +438,20 @@ local function createGUI()
     timeDown.Text = "-"
     timeDown.TextColor3 = Color3.new(1, 1, 1)
     timeDown.Font = Enum.Font.GothamBold
-    timeDown.TextSize = 16
+    timeDown.TextSize = 14
     timeDown.Parent = main
     
     local credit = Instance.new("TextLabel")
-    credit.Size = UDim2.new(1, 0, 0, 30)
-    credit.Position = UDim2.new(0, 0, 1, -30)
+    credit.Size = UDim2.new(1, 0, 0, 25)
+    credit.Position = UDim2.new(0, 0, 1, -25)
     credit.BackgroundTransparency = 1
     credit.Text = "⚡ 31 AKTİF ⚡"
     credit.TextColor3 = Color3.fromRGB(255, 50, 50)
     credit.Font = Enum.Font.GothamBold
-    credit.TextSize = 16
+    credit.TextSize = 14
     credit.Parent = main
     
-    -- ===== BUTON FONKSİYONLARI =====
+    -- Buton fonksiyonları
     toggleBtn.MouseButton1Click:Connect(function()
         settings.Enabled = not settings.Enabled
         toggleBtn.BackgroundColor3 = settings.Enabled and Color3.fromRGB(0, 200, 100) or Color3.fromRGB(200, 0, 0)
@@ -465,6 +467,16 @@ local function createGUI()
             settings.ParryMode = "NORMAL"
         end
         modeBtn.Text = "MOD: " .. settings.ParryMode
+        
+        -- Moda göre ParryTime'ı otomatik ayarla
+        if settings.ParryMode == "NORMAL" then
+            settings.ParryTime = 0.5
+        elseif settings.ParryMode == "AGGRESSIVE" then
+            settings.ParryTime = 0.4
+        else -- INSTANT
+            settings.ParryTime = 0.3
+        end
+        timeLabel.Text = "Zamanlama: " .. string.format("%.2f", settings.ParryTime)
     end)
     
     espBtn.MouseButton1Click:Connect(function()
@@ -474,83 +486,75 @@ local function createGUI()
     end)
     
     timeUp.MouseButton1Click:Connect(function()
-        settings.PredictTime = math.min(0.8, settings.PredictTime + 0.05)
-        timeSlider.Text = "Zamanlama: " .. string.format("%.2f", settings.PredictTime)
+        settings.ParryTime = math.min(0.8, settings.ParryTime + 0.05)
+        timeLabel.Text = "Zamanlama: " .. string.format("%.2f", settings.ParryTime)
     end)
     
     timeDown.MouseButton1Click:Connect(function()
-        settings.PredictTime = math.max(0.2, settings.PredictTime - 0.05)
-        timeSlider.Text = "Zamanlama: " .. string.format("%.2f", settings.PredictTime)
+        settings.ParryTime = math.max(0.2, settings.ParryTime - 0.05)
+        timeLabel.Text = "Zamanlama: " .. string.format("%.2f", settings.ParryTime)
     end)
     
     return gui
 end
 
--- ===== ANA DÖNGÜ =====
-local gui = createGUI()
-
--- RGB efekt döngüsü
-spawn(function()
-    while true do
-        for _, obj in ipairs(gui:GetDescendants()) do
-            if obj:IsA("UIStroke") and obj.Parent == gui:FindFirstChild("Frame") then
-                local hue = tick() % 5 / 5
-                obj.Color = Color3.fromHSV(hue, 1, 1)
+-- ===== BAŞLANGIÇ =====
+local function initialize()
+    Library.notify("⚡ Blade Ball Ultimate Yükleniyor...", 2)
+    
+    -- Top yöneticisini başlat
+    if not BallManager:init() then
+        Library.notify("❌ Top klasörü bulunamadı!", 3)
+        return
+    end
+    
+    -- GUI oluştur
+    local gui = createGUI()
+    
+    -- RGB efekti
+    spawn(function()
+        while gui and gui.Parent do
+            local hue = tick() % 5 / 5
+            local stroke = gui:FindFirstChild("Frame"):FindFirstChild("UIStroke")
+            if stroke then
+                stroke.Color = Color3.fromHSV(hue, 1, 1)
+            end
+            task.wait(0.05)
+        end
+    end)
+    
+    -- Ana döngü
+    local lastParryTime = 0
+    RunService.Heartbeat:Connect(function()
+        if not settings.Enabled then return end
+        
+        local incoming = getIncomingBalls()
+        if #incoming > 0 then
+            local best = incoming[1]  -- en yakın top
+            
+            if shouldParry(best, settings) then
+                local now = tick()
+                if now - lastParryTime > 0.1 then  -- cooldown
+                    performParry(best.ball)
+                    lastParryTime = now
+                end
             end
         end
-        task.wait(0.05)
-    end
-end)
-
--- Ana algılama döngüsü
-RunService.Heartbeat:Connect(function()
-    if not settings.Enabled then return end
+        
+        -- ESP güncelle
+        VisualManager:updateESP(incoming, settings)
+    end)
     
-    local dangerous = findMostDangerousBall()
-    if dangerous and shouldParry(dangerous) then
-        doParry(dangerous)
-    end
-end)
+    Library.notify("✅ Script başarıyla yüklendi! F tuşu ile aç/kapa.", 3)
+    
+    -- F tuşu ile aç/kapa
+    UserInputService.InputBegan:Connect(function(input, gpe)
+        if not gpe and input.KeyCode == Enum.KeyCode.F then
+            settings.Enabled = not settings.Enabled
+            Library.notify(settings.Enabled and "✅ Auto Parry AKTİF" or "❌ Auto Parry DEVRE DIŞI", 1.5)
+        end
+    end)
+end
 
--- Görsel güncelleme döngüsü
-RunService.RenderStepped:Connect(function()
-    createVisuals()
-end)
-
--- Tuş kontrolü
-UserInputService.InputBegan:Connect(function(input, gpe)
-    if not gpe and input.KeyCode == settings.Keybind then
-        settings.Enabled = not settings.Enabled
-        print("⚡ Ultimate Blade Ball:", settings.Enabled and "AKTİF" or "DEVRE DIŞI")
-    end
-end)
-
--- Karakter yeniden doğunca
-player.CharacterAdded:Connect(function()
-    task.wait(0.5)
-    -- Hızlı reset
-end)
-
--- Başlangıç bildirimi
-local notification = Instance.new("TextLabel")
-notification.Size = UDim2.new(0, 350, 0, 80)
-notification.Position = UDim2.new(0.5, -175, 0.8, 0)
-notification.BackgroundColor3 = Color3.fromRGB(0, 100, 200)
-notification.BackgroundTransparency = 0.2
-notification.Text = "⚡ 31 AKTİF ⚡\nULTIMATE BLADE BALL V4"
-notification.TextColor3 = Color3.new(1, 1, 1)
-notification.Font = Enum.Font.GothamBold
-notification.TextSize = 24
-notification.TextWrapped = true
-notification.Parent = CoreGui
-
-local notifCorner = Instance.new("UICorner")
-notifCorner.CornerRadius = UDim.new(0, 20)
-notifCorner.Parent = notification
-
-task.delay(4, function()
-    notification:Destroy()
-end)
-
-print("✅ ULTIMATE BLADE BALL V4 YÜKLENDİ!")
-print("🎯 Mod:", settings.ParryMode, "| Zamanlama:", settings.PredictTime)
+-- Her şeyi başlat
+initialize()
